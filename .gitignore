@@ -1,0 +1,22 @@
+# 環境変数（秘密情報）
+.env
+
+# Python関連
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# ログ
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
