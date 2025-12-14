@@ -1,5 +1,6 @@
 """
 Captain Grid Bot - メインエントリーポイント
+全損リスク限りなく0の超安全版
 Private Keyのみ環境変数管理版（セキュア）
 """
 import asyncio
@@ -27,18 +28,37 @@ async def main():
             
             # 取引設定
             "symbol": "BTC-USDT",
-            "grid_interval": 100.0,
-            "grid_count": 4,
+            "initial_balance": 20.0,  # 推奨初期残高 $20
+            
+            # 動的グリッド設定（残高に応じて自動調整）
+            "grid_interval": None,  # 自動計算
+            "grid_count": None,     # 自動計算
             "order_size_usdt": 10.0,
+            
+            # 安全機能設定
+            "volatility_threshold": 0.03,  # 3%変動で緊急停止
+            "volatility_check_interval": 60,  # 60秒間隔でチェック
+            "liquidation_buffer": 0.80,  # -80%損失で強制決済
+            "cooldown_period_minutes": 60,  # 基本冷却期間1時間
+            "max_cooldown_minutes": 180,  # 最大冷却期間3時間
+            "stability_check_period_minutes": 120,  # 過去2時間の安定性確認
+            "stability_threshold": 0.01,  # 1%以下で安定と判断
+            "min_resume_balance": 10.0,  # 再開最低残高 $10
+            "max_consecutive_errors": 5,  # 連続エラー上限
             
             # オプション設定
             "slack_webhook": None,
         }
         
-        logger.info("🔥 セキュア設定版で起動")
+        logger.info("🔥🔥🔥 Captain Grid Bot - 超安全版 起動 🔥🔥🔥")
         logger.info(f"📍 接続先: {config['base_url']}")
         logger.info(f"🆔 Account ID: {config['account_id']}")
         logger.info(f"🔑 Private Key: 環境変数から取得済み")
+        logger.info(f"💰 推奨初期残高: ${config['initial_balance']}")
+        logger.info(f"🛡️ ボラ緊急停止: {config['volatility_threshold']*100}%/{config['volatility_check_interval']}秒")
+        logger.info(f"🛡️ 強制清算回避: -{config['liquidation_buffer']*100}%損失")
+        logger.info(f"❄️ 冷却期間: {config['cooldown_period_minutes']}分（最大{config['max_cooldown_minutes']}分）")
+        logger.info(f"✅ 再開条件: ${config['min_resume_balance']}以上 + {config['stability_check_period_minutes']}分間安定")
         
         # テストネット判定（念のため）
         if "testnet" in config["base_url"].lower():
