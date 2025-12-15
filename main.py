@@ -8,6 +8,13 @@ import os
 from utils.logger import setup_logger
 from core.grid_bot import CaptainGridBot
 
+# ローカルテスト用: .envファイルから環境変数を読み込み
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # .envファイルがあれば読み込む（Koyebでは無視される）
+except ImportError:
+    pass  # dotenvがない場合はスキップ（Koyeb本番用）
+
 logger = setup_logger()
 
 async def main():
@@ -37,14 +44,15 @@ async def main():
             
             # 安全機能設定
             "volatility_threshold": 0.03,  # 3%変動で緊急停止
-            "volatility_check_interval": 60,  # 60秒間隔でチェック
+            "volatility_check_interval": 30,  # 60秒間隔でチェック
             "liquidation_buffer": 0.80,  # -80%損失で強制決済
-            "cooldown_period_minutes": 60,  # 基本冷却期間1時間
-            "max_cooldown_minutes": 180,  # 最大冷却期間3時間
-            "stability_check_period_minutes": 120,  # 過去2時間の安定性確認
-            "stability_threshold": 0.01,  # 1%以下で安定と判断
+            "cooldown_period_minutes": 45,  # 基本冷却期間45分
+            "max_cooldown_minutes": 75,  # 最大冷却期間75分（1時間15分）
+            "stability_check_period_minutes": 60,  # 過去1時間の安定性確認
+            "stability_threshold": 0.02,  # 2%以下で安定と判断
             "min_resume_balance": 10.0,  # 再開最低残高 $10
             "max_consecutive_errors": 5,  # 連続エラー上限
+            "force_resume_after_max": True,  # 最大冷却後は強制再開
             
             # オプション設定
             "slack_webhook": None,
@@ -57,8 +65,8 @@ async def main():
         logger.info(f"💰 推奨初期残高: ${config['initial_balance']}")
         logger.info(f"🛡️ ボラ緊急停止: {config['volatility_threshold']*100}%/{config['volatility_check_interval']}秒")
         logger.info(f"🛡️ 強制清算回避: -{config['liquidation_buffer']*100}%損失")
-        logger.info(f"❄️ 冷却期間: {config['cooldown_period_minutes']}分（最大{config['max_cooldown_minutes']}分）")
-        logger.info(f"✅ 再開条件: ${config['min_resume_balance']}以上 + {config['stability_check_period_minutes']}分間安定")
+        logger.info(f"❄️ 冷却期間: {config['cooldown_period_minutes']}分（最大{config['max_cooldown_minutes']}分）→強制再開")
+        logger.info(f"✅ 再開条件: ${config['min_resume_balance']}以上 + {config['stability_check_period_minutes']}分間安定（または最大冷却後）")
         
         # テストネット判定（念のため）
         if "testnet" in config["base_url"].lower():
