@@ -54,7 +54,7 @@ class CaptainGridBot:
         self.stability_threshold = float(config.get("stability_threshold", 0.01))
         self.min_resume_balance = float(config.get("min_resume_balance", 10.0))
         self.max_consecutive_errors = int(config.get("max_consecutive_errors", 5))
-        self.force_resume_after_max = bool(config.get("force_resume_after_max", True))  # ← この行を追加
+        self.force_resume_after_max = bool(config.get("force_resume_after_max", True))  # 強制再開フラグ
         
         # 状態管理
         self.trading_paused = False
@@ -104,13 +104,13 @@ class CaptainGridBot:
             logger.error(f"❌ 残高取得エラー: {e}")
             return 0.0
     
-  async def get_unrealized_pnl(self) -> float:
+    async def get_unrealized_pnl(self) -> float:
         """未実現損益を取得（SDK 0.1.0対応版）"""
         # EdgeX SDK 0.1.0では get_positions メソッドが存在しないため
         # 未実現PnLの取得は一時的に無効化
         # ボラ緊急停止（30秒3%）で十分カバーできる
         logger.debug(f"📊 未実現PnL: 取得スキップ（SDK制限）")
-        return 0.0  
+        return 0.0
     
     def calculate_grid_settings(self, balance: float, btc_price: float) -> tuple:
         """残高に応じてグリッド設定を動的計算"""
@@ -202,34 +202,10 @@ class CaptainGridBot:
         return False
     
     async def check_liquidation_risk(self) -> bool:
-        """強制清算リスクチェック"""
-        try:
-            balance = await self.get_balance()
-            unrealized_pnl = await self.get_unrealized_pnl()
-            total_equity = balance + unrealized_pnl
-            
-            if self.initial_balance <= 0:
-                return False
-            
-            loss_rate = (self.initial_balance - total_equity) / self.initial_balance
-            
-            if loss_rate >= self.liquidation_buffer:
-                logger.critical(f"🚨 強制清算リスク検知！")
-                logger.critical(f"📊 損失率: {loss_rate*100:.1f}%")
-                logger.critical(f"💰 初期残高: ${self.initial_balance:.2f}")
-                logger.critical(f"💰 現在残高: ${total_equity:.2f}")
-                
-                await self.emergency_stop("強制清算回避")
-                return True
-            
-            if loss_rate >= 0.50:  # -50%で警告
-                logger.warning(f"⚠️ 損失率: {loss_rate*100:.1f}% - 要注意")
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"❌ 清算リスクチェックエラー: {e}")
-            return False
+        """強制清算リスクチェック（一時無効化）"""
+        # SDK制限により未実現PnL取得不可のため一時無効化
+        # ボラ緊急停止（30秒3%）で十分カバーできる
+        return False
     
     async def check_market_stability(self) -> bool:
         """市場安定性チェック（過去N分間の変動率）"""
@@ -294,41 +270,12 @@ class CaptainGridBot:
             logger.error(f"❌ 緊急停止処理エラー: {e}")
     
     async def close_all_positions(self):
-        """全ポジションをクローズ"""
-        try:
-            positions_resp = await self.client.get_positions()
-            
-            if isinstance(positions_resp, dict):
-                positions = positions_resp.get("data", [])
-            elif isinstance(positions_resp, list):
-                positions = positions_resp
-            else:
-                positions = []
-            
-            for pos in positions:
-                if str(pos.get("contractId")) == self.contract_id:
-                    size = abs(float(pos.get("size", 0)))
-                    if size > 0:
-                        side = OrderSide.SELL if float(pos.get("size", 0)) > 0 else OrderSide.BUY
-                        
-                        try:
-                            # 成行で即時決済
-                            await self.client.create_market_order(
-                                contract_id=str(self.contract_id),
-                                size=str(size),
-                                side=side
-                            )
-                            logger.info(f"✅ ポジションクローズ: {size} BTC")
-                            await asyncio.sleep(0.5)
-                        except Exception as e:
-                            logger.error(f"❌ ポジションクローズ失敗: {e}")
-            
-            logger.info("✅ 全ポジションクローズ試行完了")
-            
-        except Exception as e:
-            logger.error(f"❌ ポジションクローズエラー: {e}")
+        """全ポジションをクローズ（SDK制限により無効化）"""
+        # SDK 0.1.0では get_positions がないため無効化
+        logger.info("📊 ポジションクローズ: SDK制限によりスキップ")
+        return
     
-   async def auto_resume_check(self):
+    async def auto_resume_check(self):
         """自動再開チェック（時間経過 + 市場安定性 + 強制再開）"""
         if not self.trading_paused or not self.pause_start_time:
             return
@@ -376,7 +323,7 @@ class CaptainGridBot:
             await self.resume_trading()
         else:
             remaining = self.max_cooldown_minutes - elapsed
-            logger.info(f"⚠️ まだ不安定 → 待機継続（{elapsed:.1f}分経過、あと{remaining:.1f}分で強制再開）") 
+            logger.info(f"⚠️ まだ不安定 → 待機継続（{elapsed:.1f}分経過、あと{remaining:.1f}分で強制再開）")
     
     async def resume_trading(self):
         """取引再開"""
@@ -607,7 +554,7 @@ class CaptainGridBot:
                     if await self.check_volatility(new_price):
                         continue  # 緊急停止発動済み
                     
-                    # 2. 強制清算リスクチェック
+                    # 2. 強制清算リスクチェック（無効化済み）
                     if await self.check_liquidation_risk():
                         continue  # 緊急停止発動済み
                     
