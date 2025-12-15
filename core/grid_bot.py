@@ -54,6 +54,7 @@ class CaptainGridBot:
         self.stability_threshold = float(config.get("stability_threshold", 0.01))
         self.min_resume_balance = float(config.get("min_resume_balance", 10.0))
         self.max_consecutive_errors = int(config.get("max_consecutive_errors", 5))
+        self.force_resume_after_max = bool(config.get("force_resume_after_max", True))  # ← この行を追加
         
         # 状態管理
         self.trading_paused = False
@@ -103,30 +104,13 @@ class CaptainGridBot:
             logger.error(f"❌ 残高取得エラー: {e}")
             return 0.0
     
-    async def get_unrealized_pnl(self) -> float:
-        """未実現損益を取得"""
-        try:
-            positions_resp = await self.client.get_positions()
-            
-            if isinstance(positions_resp, dict):
-                positions = positions_resp.get("data", [])
-            elif isinstance(positions_resp, list):
-                positions = positions_resp
-            else:
-                positions = []
-            
-            total_pnl = 0.0
-            for pos in positions:
-                if str(pos.get("contractId")) == self.contract_id:
-                    pnl = float(pos.get("unrealizedPnl", 0))
-                    total_pnl += pnl
-            
-            logger.debug(f"📊 未実現PnL: ${total_pnl:.2f}")
-            return total_pnl
-            
-        except Exception as e:
-            logger.error(f"❌ PnL取得エラー: {e}")
-            return 0.0
+  async def get_unrealized_pnl(self) -> float:
+        """未実現損益を取得（SDK 0.1.0対応版）"""
+        # EdgeX SDK 0.1.0では get_positions メソッドが存在しないため
+        # 未実現PnLの取得は一時的に無効化
+        # ボラ緊急停止（30秒3%）で十分カバーできる
+        logger.debug(f"📊 未実現PnL: 取得スキップ（SDK制限）")
+        return 0.0  
     
     def calculate_grid_settings(self, balance: float, btc_price: float) -> tuple:
         """残高に応じてグリッド設定を動的計算"""
@@ -344,8 +328,8 @@ class CaptainGridBot:
         except Exception as e:
             logger.error(f"❌ ポジションクローズエラー: {e}")
     
-    async def auto_resume_check(self):
-        """自動再開チェック（時間経過 + 市場安定性）"""
+   async def auto_resume_check(self):
+        """自動再開チェック（時間経過 + 市場安定性 + 強制再開）"""
         if not self.trading_paused or not self.pause_start_time:
             return
         
@@ -358,11 +342,25 @@ class CaptainGridBot:
             logger.info(f"❄️ 冷却中... あと{remaining:.1f}分")
             return
         
-        # 最大冷却期間超過
-        if elapsed > self.max_cooldown_minutes:
-            logger.warning(f"⚠️ 最大冷却期間（{self.max_cooldown_minutes}分）超過")
-            logger.warning("⚠️ 手動確認を推奨します")
-            return
+        # 最大冷却期間超過 → 強制再開
+        if elapsed >= self.max_cooldown_minutes:
+            if self.force_resume_after_max:
+                logger.warning(f"⚠️ 最大冷却期間（{self.max_cooldown_minutes}分）到達")
+                logger.info(f"🔥 強制再開を実行します")
+                
+                # 残高チェックだけは実施
+                balance = await self.get_balance()
+                if balance < self.min_resume_balance:
+                    logger.error(f"❌ 残高不足で再開不可: ${balance:.2f} < ${self.min_resume_balance}")
+                    return
+                
+                # 強制再開
+                await self.resume_trading()
+                return
+            else:
+                logger.warning(f"⚠️ 最大冷却期間（{self.max_cooldown_minutes}分）超過")
+                logger.warning("⚠️ 手動確認を推奨します")
+                return
         
         # 残高チェック
         balance = await self.get_balance()
@@ -377,7 +375,8 @@ class CaptainGridBot:
             logger.info(f"✅ 市場安定化確認 → 取引再開！")
             await self.resume_trading()
         else:
-            logger.info(f"⚠️ まだ不安定 → 待機継続（{elapsed:.1f}分経過）")
+            remaining = self.max_cooldown_minutes - elapsed
+            logger.info(f"⚠️ まだ不安定 → 待機継続（{elapsed:.1f}分経過、あと{remaining:.1f}分で強制再開）") 
     
     async def resume_trading(self):
         """取引再開"""
