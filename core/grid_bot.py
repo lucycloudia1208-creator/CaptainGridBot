@@ -1,6 +1,6 @@
 """
-Captain Grid Bot - $10スタート超安全版（修正版）
-全損回避特化 + ネットポジション制限 + 正確なサイズ計算
+Captain Grid Bot - $17最終資金・不死身版
+追加入金なし・超安全待機モード
 EdgeX SDK 0.1.0対応
 """
 import asyncio
@@ -13,7 +13,7 @@ from utils.logger import setup_logger, send_slack_notification
 logger = setup_logger()
 
 class CaptainGridBot:
-    """$10スタート超安全版グリッドボット"""
+    """$17最終資金・不死身版グリッドボット"""
     
     def __init__(self, config: Dict):
         """初期化"""
@@ -35,7 +35,7 @@ class CaptainGridBot:
         self.symbol = config["symbol"]
         
         # 基本設定
-        self.initial_balance = float(config.get("initial_balance", 10.0))
+        self.initial_balance = float(config.get("initial_balance", 17.18))
         self.order_size_usdt = float(config["order_size_usdt"])
         self.slack_webhook = config.get("slack_webhook")
         
@@ -57,7 +57,7 @@ class CaptainGridBot:
         self.max_cooldown_minutes = int(config.get("max_cooldown_minutes", 75))
         self.stability_check_period_minutes = int(config.get("stability_check_period_minutes", 60))
         self.stability_threshold = float(config.get("stability_threshold", 0.02))
-        self.min_resume_balance = float(config.get("min_resume_balance", 7.0))
+        self.min_resume_balance = float(config.get("min_resume_balance", 12.0))
         self.max_consecutive_errors = int(config.get("max_consecutive_errors", 5))
         self.force_resume_after_max = bool(config.get("force_resume_after_max", True))
         
@@ -82,12 +82,14 @@ class CaptainGridBot:
         self.current_grid_interval: Optional[float] = None
         self.current_grid_count: Optional[int] = None
         
-        logger.info(f"🚀 Captain Grid Bot - $10スタート超安全版 初期化完了")
-        logger.info(f"📊 Phase1: 2本グリッド（$10-20）")
+        logger.info(f"🚀 Captain Grid Bot - $17不死身版 初期化完了")
+        logger.info(f"📊 Phase1: 2本グリッド（$17-20）")
         logger.info(f"📊 Phase2: 3本グリッド（$20-30）")
         logger.info(f"⚡ レバレッジ: {self.leverage}倍（EdgeX設定）")
         logger.info(f"📏 最小ロット: {self.min_size} BTC")
         logger.info(f"🎄 クリスマス期間: 手動監視を推奨します")
+        logger.info(f"🛡️ $17最終資金モード: 追加入金なしで不死身運用開始！！")
+        logger.info(f"⚠️ 現在の高値圏では注文スキップ多発 → 超安全待機モード")
     
     async def get_balance(self) -> float:
         """残高取得（異常値ハンドリング付き）"""
@@ -124,9 +126,10 @@ class CaptainGridBot:
             return self.last_valid_balance if self.last_valid_balance else 0.0
     
     async def check_position_imbalance(self) -> tuple:
-        """ネットポジション偏りチェック（注文本数ベース）"""
+        """ネットポジション偏りチェック（注文本数ベース・SDK修正版）"""
         try:
-            orders_resp = await self.client.get_active_orders(contract_id=self.contract_id)
+            # SDK修正: contract_id引数を削除
+            orders_resp = await self.client.get_active_orders()
             
             if isinstance(orders_resp, dict):
                 orders = orders_resp.get("data", [])
@@ -135,10 +138,13 @@ class CaptainGridBot:
             else:
                 orders = []
             
+            # contract_idでフィルタ
+            filtered_orders = [o for o in orders if str(o.get("contractId")) == self.contract_id]
+            
             buy_count = 0
             sell_count = 0
             
-            for order in orders:
+            for order in filtered_orders:
                 side = order.get("side")
                 if side == "BUY" or side == 1:
                     buy_count += 1
@@ -181,13 +187,13 @@ class CaptainGridBot:
         # Phase別グリッド数
         if self.current_phase == 1:
             grid_count = self.grid_count_phase1  # 2本
-            grid_interval = btc_price * 0.0005   # 0.05%
+            grid_interval = btc_price * 0.0008   # 0.08%（少し広め）
         elif self.current_phase == 2:
             grid_count = self.grid_count_phase2  # 3本
-            grid_interval = btc_price * 0.0004   # 0.04%（少しタイト）
+            grid_interval = btc_price * 0.0006   # 0.06%
         else:  # Phase3（将来用）
             grid_count = 4
-            grid_interval = btc_price * 0.0004
+            grid_interval = btc_price * 0.0005
         
         grid_interval = round(grid_interval, 1)  # 小数点1桁に丸め
         
@@ -424,7 +430,8 @@ class CaptainGridBot:
     async def cancel_all(self):
         """全注文キャンセル"""
         try:
-            orders_resp = await self.client.get_active_orders(contract_id=self.contract_id)
+            # SDK修正: contract_id引数を削除
+            orders_resp = await self.client.get_active_orders()
             
             if isinstance(orders_resp, dict):
                 orders = orders_resp.get("data", [])
@@ -433,13 +440,16 @@ class CaptainGridBot:
             else:
                 orders = []
             
-            if not orders:
+            # contract_idでフィルタ
+            filtered_orders = [o for o in orders if str(o.get("contractId")) == self.contract_id]
+            
+            if not filtered_orders:
                 logger.info("📭 キャンセル対象なし")
                 return
             
-            logger.info(f"🗑️ {len(orders)}件キャンセル中...")
+            logger.info(f"🗑️ {len(filtered_orders)}件キャンセル中...")
             
-            for order in orders:
+            for order in filtered_orders:
                 try:
                     order_id = order.get("orderId") or order.get("id")
                     if order_id:
@@ -454,7 +464,7 @@ class CaptainGridBot:
             logger.error(f"❌ キャンセルエラー: {e}")
     
     async def place_grid(self, center_price: float):
-        """グリッド配置（ネットポジション偏り防止付き）"""
+        """グリッド配置（ネットポジション偏り防止付き・$17不死身版）"""
         if not self.current_grid_count or not self.current_grid_interval:
             balance = await self.get_balance()
             self.current_grid_count, self.current_grid_interval = self.calculate_grid_settings(
@@ -476,17 +486,19 @@ class CaptainGridBot:
             logger.warning(f"⚠️ ポジション偏り考慮: 差={imbalance}本")
         
         placed_count = 0
+        skipped_count = 0
         
         for i in range(1, int(self.current_grid_count) + 1):
             buy_price = round(center_price - (i * grid_interval), 1)
             sell_price = round(center_price + (i * grid_interval), 1)
             
-            # 注文サイズ計算（修正版：レバレッジは掛けない）
+            # 注文サイズ計算（絶対に証拠金ベース・レバレッジは掛けない！）
             size_btc = order_size_usdt / center_price
             
-            # 最小ロットチェック（不足ならスキップ）
+            # 最小ロットチェック（不足なら絶対スキップ・無理やり0.001にしない！）
             if size_btc < self.min_size:
                 logger.warning(f"⚠️ 注文サイズ不足 ({size_btc:.6f} < {self.min_size}) → スキップ")
+                skipped_count += 1
                 continue
             
             size_btc = round(size_btc, 3)
@@ -498,7 +510,7 @@ class CaptainGridBot:
                     await self.client.create_limit_order(
                         contract_id=str(self.contract_id),
                         size=str(size_btc),
-                        price=str(round(buy_price, 1)),  # 小数点1桁で丸め
+                        price=str(round(buy_price, 1)),
                         side=OrderSide.BUY
                     )
                     placed_count += 1
@@ -516,7 +528,7 @@ class CaptainGridBot:
                     await self.client.create_limit_order(
                         contract_id=str(self.contract_id),
                         size=str(size_btc),
-                        price=str(round(sell_price, 1)),  # 小数点1桁で丸め
+                        price=str(round(sell_price, 1)),
                         side=OrderSide.SELL
                     )
                     placed_count += 1
@@ -527,13 +539,17 @@ class CaptainGridBot:
             else:
                 logger.warning(f"⚠️ 売り注文スキップ（ショート偏重防止）")
         
+        if skipped_count > 0:
+            logger.info(f"📊 注文サイズ不足でスキップ: {skipped_count}件（正常動作）")
+            logger.info(f"💡 価格が下がれば自然に注文可能になります")
+        
         logger.info(f"🎯 配置完了: {placed_count}件")
     
     async def run(self):
         """メインループ"""
         try:
             logger.info("=" * 60)
-            logger.info("🏴‍☠️ Captain Grid Bot - $10伝説スタート！")
+            logger.info("🏴‍☠️ Captain Grid Bot - $17不死身伝説スタート！")
             logger.info("=" * 60)
             
             await self.initialize()

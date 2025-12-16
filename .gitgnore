@@ -1,1 +1,61 @@
+# 環境変数（秘密情報）
 .env
+
+# Python関連
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# ログ
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+```
+
+**これで`.env`ファイルは絶対にGitHubに行きません**
+
+---
+
+## 🔧 Koyeb環境変数設定（1つだけ）
+
+### ステップ1: Koyeb Secretを作成
+
+1. **Koyebダッシュボード** → **Secrets**
+2. **Create Secret** をクリック
+3. 以下を入力：
+   - **Name**: `EDGEX_PRIVATE_KEY`
+   - **Value**: `036ec85492...a50503d00d`（あなたの64文字hex）
+4. **Create** をクリック
+
+---
+
+### ステップ2: 環境変数でSecretを参照
+
+1. **Koyebダッシュボード** → **あなたのサービス** → **Settings**
+2. **Environment Variables** セクション
+3. **既存の環境変数を全て削除**（もしあれば）
+4. **新しい環境変数を1つだけ追加**：
+
+| Variable Name | Value | Type |
+|---------------|-------|------|
+| `EDGEX_STARK_PRIVATE_KEY` | `@secret:EDGEX_PRIVATE_KEY` | Secret reference |
+
+**↑ これで完璧に暗号化されて安全です！**
+
+---
+
+## 📊 設定の確認（コピペ用）
+
+### Koyeb Environment Variables（最終形）
+```
+EDGEX_STARK_PRIVATE_KEY = @secret:EDGEX_PRIVATE_KEY
