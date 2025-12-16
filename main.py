@@ -1,7 +1,6 @@
 """
-Captain Grid Bot - メインエントリーポイント
-全損リスク限りなく0の超安全版
-Private Keyのみ環境変数管理版（セキュア）
+Captain Grid Bot - $10スタート超安全版
+全損リスク限りなく0 + クリスマス対応
 """
 import asyncio
 import os
@@ -11,22 +10,20 @@ from core.grid_bot import CaptainGridBot
 # ローカルテスト用: .envファイルから環境変数を読み込み
 try:
     from dotenv import load_dotenv
-    load_dotenv()  # .envファイルがあれば読み込む（Koyebでは無視される）
+    load_dotenv()
 except ImportError:
-    pass  # dotenvがない場合はスキップ（Koyeb本番用）
+    pass
 
 logger = setup_logger()
 
 async def main():
     """メイン関数"""
     try:
-        # Private Keyだけ環境変数から取得（セキュリティ確保）
         private_key = os.getenv("EDGEX_STARK_PRIVATE_KEY")
         
         if not private_key:
             raise ValueError("❌ 環境変数 EDGEX_STARK_PRIVATE_KEY が設定されていません")
         
-        # その他の設定は直接記述（環境変数トラブル回避）
         config = {
             # EdgeX API基本設定
             "base_url": "https://pro.edgex.exchange",
@@ -35,56 +32,60 @@ async def main():
             
             # 取引設定
             "symbol": "BTC-USDT",
-            "initial_balance": 20.0,  # 推奨初期残高 $20
+            "initial_balance": 10.0,  # $10スタート
             
-            # 動的グリッド設定（残高に応じて自動調整）
-            "grid_interval": None,  # 自動計算
-            "grid_count": None,     # 自動計算
-            "order_size_usdt": 10.0,
+            # 超安全版設定
+            "order_size_usdt": 3.0,  # $3固定（超保守的）
+            "grid_count_phase1": 2,  # Phase1: 2本固定
+            "grid_count_phase2": 3,  # Phase2: 3本（$20超え）
             
             # 安全機能設定
-            "volatility_threshold": 0.03,  # 3%変動で緊急停止
-            "volatility_check_interval": 30,  # 60秒間隔でチェック
-            "liquidation_buffer": 0.80,  # -80%損失で強制決済
-            "cooldown_period_minutes": 45,  # 基本冷却期間45分
-            "max_cooldown_minutes": 75,  # 最大冷却期間75分（1時間15分）
-            "stability_check_period_minutes": 60,  # 過去1時間の安定性確認
-            "stability_threshold": 0.02,  # 2%以下で安定と判断
-            "min_resume_balance": 10.0,  # 再開最低残高 $10
-            "max_consecutive_errors": 5,  # 連続エラー上限
-            "force_resume_after_max": True,  # 最大冷却後は強制再開
+            "volatility_threshold": 0.03,  # 急落: 60秒3%
+            "volatility_check_interval": 30,  # 30秒ごとチェック
+            "gradual_decline_threshold": 0.01,  # ジワ下落: 10分1%
+            "gradual_decline_window": 600,  # 10分（秒）
+            "loss_limit": 0.30,  # 損失上限: -30%
+            "max_net_position_btc": 0.01,  # ネットポジション上限
+            "position_imbalance_limit": 3,  # 注文偏り上限
             
-            # オプション設定
+            # 自動復帰設定
+            "cooldown_period_minutes": 45,
+            "max_cooldown_minutes": 75,
+            "stability_check_period_minutes": 60,
+            "stability_threshold": 0.02,
+            "min_resume_balance": 7.0,  # $7以上で再開可能
+            "max_consecutive_errors": 5,
+            "force_resume_after_max": True,
+            
+            # Phase切り替え
+            "phase2_threshold": 20.0,  # $20でPhase2へ
+            "phase3_threshold": 30.0,  # $30でPhase3へ（将来用）
+            
+            # オプション
             "slack_webhook": None,
         }
         
-        logger.info("🔥🔥🔥 Captain Grid Bot - 超安全版 起動 🔥🔥🔥")
+        logger.info("🔥🔥🔥 Captain Grid Bot - $10スタート超安全版 🔥🔥🔥")
         logger.info(f"📍 接続先: {config['base_url']}")
         logger.info(f"🆔 Account ID: {config['account_id']}")
-        logger.info(f"🔑 Private Key: 環境変数から取得済み")
-        logger.info(f"💰 推奨初期残高: ${config['initial_balance']}")
-        logger.info(f"🛡️ ボラ緊急停止: {config['volatility_threshold']*100}%/{config['volatility_check_interval']}秒")
-        logger.info(f"🛡️ 強制清算回避: -{config['liquidation_buffer']*100}%損失")
-        logger.info(f"❄️ 冷却期間: {config['cooldown_period_minutes']}分（最大{config['max_cooldown_minutes']}分）→強制再開")
-        logger.info(f"✅ 再開条件: ${config['min_resume_balance']}以上 + {config['stability_check_period_minutes']}分間安定（または最大冷却後）")
+        logger.info(f"💰 初期残高: ${config['initial_balance']}")
+        logger.info(f"💵 注文サイズ: ${config['order_size_usdt']}固定")
+        logger.info(f"🛡️ 急落検知: {config['volatility_threshold']*100}%/{config['volatility_check_interval']}秒")
+        logger.info(f"🛡️ ジワ下落検知: {config['gradual_decline_threshold']*100}%/{config['gradual_decline_window']//60}分")
+        logger.info(f"🛡️ 損失上限: -{config['loss_limit']*100}%")
+        logger.info(f"🛡️ ネットポジション上限: {config['max_net_position_btc']} BTC")
+        logger.info(f"🎯 Phase1目標: ${config['phase2_threshold']}到達")
+        logger.info(f"🎄 クリスマス期間: 手動監視を推奨します")
+        logger.warning("🔴 本番モードで起動！")
         
-        # テストネット判定（念のため）
-        if "testnet" in config["base_url"].lower():
-            logger.info("⚠️ テストネットモードで起動")
-        else:
-            logger.warning("🔴 本番モードで起動！資金に注意してください")
-        
-        # ボット起動
         bot = CaptainGridBot(config)
         await bot.run()
         
     except ValueError as e:
         logger.error(f"❌ 設定エラー: {e}")
-        logger.error("📋 Koyeb環境変数を確認してください")
     except Exception as e:
         logger.error(f"❌ 予期しないエラー: {e}")
         raise
 
 if __name__ == "__main__":
-    # 非同期メインループ実行
     asyncio.run(main())
