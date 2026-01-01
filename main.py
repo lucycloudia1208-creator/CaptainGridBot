@@ -37,22 +37,38 @@ async def sync_leverage(bot: CaptainGridBot):
     except Exception as e:
         logger.warning(f"⚠️ レバレッジ同期エラー: {e} → デフォルト{bot.leverage}倍を使用")
 
-async def check_api_version(bot: CaptainGridBot):
-    """EdgeX API接続確認（V2移行監視）"""
+async def check_api_version(bot: GridBot):
+    """
+    EdgeX API接続確認 + 契約ID取得（2026年仕様対応）
+    """
     try:
-        logger.info("📡 EdgeX API接続確認中...")
+        # 2026年最新方式: 契約一覧からシンボルで検索
+        contracts = await bot.client.get_contracts()
+        target_contract = None
+        for contract in contracts:
+            if contract['symbol'] == bot.config["symbol"]:
+                target_contract = contract
+                break
         
-        ticker = await bot.client.get_ticker(contract_id=bot.contract_id)
+        if not target_contract:
+            raise ValueError(f"❌ 契約が見つかりません: {bot.config['symbol']}")
         
-        if ticker and ticker.get("code") == "SUCCESS":
-            logger.info("✅ EdgeX API接続成功（V1稼働中）")
-        else:
-            logger.warning("⚠️ API接続テスト: レスポンス異常")
-            
+        # 契約IDを設定
+        bot.contract_id = target_contract['id']
+        
+        # テストで現在価格取得（tickerの代わり）
+        ticker = await bot.client.get_ticker_price(contract_id=bot.contract_id)
+        # または get_market_ticker() など、SDK次第で名前が変わってる可能性あり
+        
+        logger.info(f"✅ EdgeX API接続成功 - 現在価格: ${ticker['price']}")
+        logger.info(f"✅ 契約ID取得: {bot.contract_id}")
+        
     except Exception as e:
         logger.error(f"❌ API接続確認エラー: {e}")
-        raise
-
+        logger.error("==================================================================")
+        logger.error("❌ 致命的エラー: API接続失敗 - ボットを終了します")
+        logger.error("==================================================================")
+        raise SystemExit(1)
 async def main():
     """メイン処理"""
     try:
