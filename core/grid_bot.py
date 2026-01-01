@@ -1,4 +1,5 @@
 import asyncio
+import aiohttp  # ← 追加！！！
 import os
 from loguru import logger
 
@@ -7,7 +8,7 @@ class CaptainGridBot:
         self.base_url = "https://pro.edgex.exchange"
         self.account_id = os.getenv("ACCOUNT_ID")
         self.stark_private_key = os.getenv("STARK_PRIVATE_KEY")
-        self.contract_id = "10000001"  # BTC-USDT Perpetual
+        self.contract_id = "10000001"
         self.leverage = 100
         self.min_lot = 0.001
 
@@ -23,7 +24,6 @@ class CaptainGridBot:
         logger.info("🎯 毎日目標: $0.001-0.01の微益！！")
 
     async def get_price(self) -> float:
-        """Funding APIでoraclePrice取得（最安定）"""
         async with aiohttp.ClientSession() as session:
             try:
                 url = f"{self.base_url}/api/v1/public/funding/getLatestFundingRate?contractId={self.contract_id}"
@@ -68,8 +68,8 @@ class CaptainGridBot:
                 stark_private_key=self.stark_private_key
             )
 
-            grid_percentage = 0.0006  # 0.06%
-            order_quantity = "0.002"  # 資金46.65ドル対応安全量
+            grid_percentage = 0.0006
+            order_quantity = "0.002"
 
             buy_price = round(current_price * (1 - grid_percentage), 2)
             sell_price = round(current_price * (1 + grid_percentage), 2)
@@ -78,7 +78,6 @@ class CaptainGridBot:
             logger.info(f"   ↓ 買い指値: ${buy_price} で {order_quantity} BTC")
             logger.info(f"   ↑ 売り指値: ${sell_price} で {order_quantity} BTC")
 
-            # 買い注文
             buy_result = await client.create_limit_order(
                 contract_id=self.contract_id,
                 size=order_quantity,
@@ -87,7 +86,6 @@ class CaptainGridBot:
             )
             logger.info(f"📩 買い注文結果: {buy_result}")
 
-            # 売り注文
             sell_result = await client.create_limit_order(
                 contract_id=self.contract_id,
                 size=order_quantity,
