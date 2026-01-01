@@ -1,10 +1,6 @@
 import asyncio
 import os
 from loguru import logger
-from dotenv import load_dotenv
-
-# .env読み込み（Koyebでも動くように）
-load_dotenv()
 
 # ここで新しいCaptainGridBotをインポート！！（パスは君の構成に合わせて）
 from core.grid_bot import CaptainGridBot

@@ -2,9 +2,6 @@ import asyncio
 import aiohttp
 import os
 from loguru import logger
-from dotenv import load_dotenv
-
-load_dotenv()
 
 class CaptainGridBot:
     def __init__(self):
