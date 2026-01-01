@@ -21,6 +21,7 @@ class CaptainGridBot:
         logger.info("🌍 環境: 🚀 PRODUCTION")
         logger.info(f"🔗 Base URL: {self.base_url}")
         logger.info(f"👤 Account ID: {self.account_id or 'None (Koyeb環境変数設定要！)'}")
+        logger.info(f"🔑 STARK_PRIVATE_KEY 読み込み: {'成功 (長さ ' + str(len(self.stark_private_key or '')) + '文字)' if self.stark_private_key else '失敗 (None)'}")
         logger.info("🚀 初期化完了")
         logger.info(f"📊 Phase1: {self.phase1_grids}本グリッド / Phase2: {self.phase2_grids}本グリッド")
         logger.info(f"⚡ レバレッジ: {self.leverage}倍")
