@@ -646,3 +646,4 @@ class CaptainGridBot:
         except Exception as e:
             logger.error(f"❌ 致命的エラー: {e}")
             raise
+        
