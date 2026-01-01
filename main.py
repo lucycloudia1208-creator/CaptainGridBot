@@ -79,18 +79,12 @@ async def main():
         config = get_config()
     
         # 環境情報表示
-        env_type = "🧪 TESTNET" if config["is_testnet"] else "🚀 PRODUCTION"
-        logger.info(f"🌍 環境: {env_type}")
+        logger.info(f"🌍 環境: 🚀 PRODUCTION")
         logger.info(f"🔗 Base URL: {config['base_url']}")
         logger.info(f"👤 Account ID: {config['account_id']}")
-        logger.info(f"💱 Symbol: {config['symbol']} (Contract: {config['contract_id']})")
-        logger.info(f"📊 グリッド: {config['grid_count']}本 × ${config['grid_interval']:.1f}幅")
+        logger.info(f"💱 Symbol: {config['symbol']}")
         logger.info(f"💰 初期残高: ${config['initial_balance']:.2f}")
         logger.info(f"💵 注文サイズ: ${config['order_size_usdt']:.2f}/注文")
-        
-        if config["is_testnet"]:
-            logger.warning("⚠️ テストネットモードで稼働中")
-            logger.warning("⚠️ 本番デプロイ時は EDGEX_BASE_URL を変更してください")
         
         # Botインスタンス作成
         logger.info("🤖 Bot初期化中...")
