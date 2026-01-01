@@ -69,10 +69,12 @@ class CaptainGridBot:
             )
 
             grid_percentage = 0.0006
-            order_quantity = "0.002"
+            order_quantity = "0.002"  # ← 最低ロット0.001の2倍、安全！！ そのまま！！
 
-            buy_price = round(current_price * (1 - grid_percentage), 2)
-            sell_price = round(current_price * (1 + grid_percentage), 2)
+            # 価格だけ0.1刻みに丸める（quantityは触らない！！）
+            base_price = current_price
+            buy_price = round((base_price * (1 - grid_percentage)) // 0.1 * 0.1, 1)
+            sell_price = round((base_price * (1 + grid_percentage)) // 0.1 * 0.1, 1)
 
             logger.info("🔥 SDKで本番グリッド注文実行！！")
             logger.info(f"   ↓ 買い指値: ${buy_price} で {order_quantity} BTC")
