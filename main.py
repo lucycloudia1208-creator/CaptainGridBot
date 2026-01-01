@@ -1,94 +1,138 @@
 """
-Captain Grid Bot - $17微益モード版
-半損許容・毎日稼ぐ・勝ち体験重視
+Captain Grid Bot エントリーポイント
+EdgeX 2026年1月版 - レバレッジ同期対応
 """
 import asyncio
-import os
-from utils.logger import setup_logger
-from core.grid_bot import CaptainGridBot
+import sys
+from pathlib import Path
 
-# ローカルテスト用: .envファイルから環境変数を読み込み
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+# プロジェクトルートをパスに追加
+sys.path.insert(0, str(Path(__file__).parent))
+
+from core.grid_bot import CaptainGridBot
+from utils.config import get_config, validate_config
+from utils.logger import setup_logger
 
 logger = setup_logger()
 
-async def main():
-    """メイン関数"""
+async def sync_leverage(bot: CaptainGridBot):
+    """EdgeX APIからレバレッジ設定を取得・同期"""
     try:
-        private_key = os.getenv("EDGEX_STARK_PRIVATE_KEY")
+        logger.info("🔧 レバレッジ設定を確認中...")
         
-        if not private_key:
-            raise ValueError("❌ 環境変数 EDGEX_STARK_PRIVATE_KEY が設定されていません")
+        # アカウント情報取得
+        account_info = await bot.client.get_account_info(account_id=bot.account_id)
         
-        config = {
-            # EdgeX API基本設定
-            "base_url": "https://pro.edgex.exchange",
-            "account_id": 678726936008066030,
-            "stark_private_key": private_key,
+        if isinstance(account_info, dict):
+            data = account_info.get("data", {})
+            # EdgeXのレバレッジは契約ごとに設定される可能性
+            # 通常は100倍固定だが、APIから取得して確認
+            api_leverage = data.get("leverage", 100)
             
-            # 取引設定
-            "symbol": "BTC-USDT",
-            "initial_balance": 17.18,  # $17最終資金
+            if api_leverage != bot.leverage:
+                logger.warning(f"⚠️ レバレッジ不一致: Bot={bot.leverage}倍 vs API={api_leverage}倍")
+                logger.info(f"🔧 APIの設定に同期: {api_leverage}倍")
+                bot.leverage = api_leverage
+            else:
+                logger.info(f"✅ レバレッジ確認: {bot.leverage}倍（一致）")
+        else:
+            logger.warning("⚠️ アカウント情報取得失敗 → デフォルト100倍を使用")
             
-            # 微益モード設定
-            "order_size_usdt": 5.0,  # $5（攻めと守りのバランス）
-            "grid_count_phase1": 2,  # Phase1: 2本
-            "grid_count_phase2": 3,  # Phase2: 3本（$20超え）
-            "grid_interval_percentage": 0.0006,  # 0.06%幅（約$52）
-            "force_min_order": True,  # 最小ロット強制配置
-            
-            # 安全機能設定（緩和版）
-            "volatility_threshold": 0.03,  # 急落: 60秒3%
-            "volatility_check_interval": 30,  # 30秒ごとチェック
-            "gradual_decline_threshold": 0.01,  # ジワ下落: 10分1%
-            "gradual_decline_window": 600,  # 10分（秒）
-            "loss_limit": 0.50,  # 損失上限: -50%（半損許容）
-            "max_net_position_btc": 0.01,  # ネットポジション上限
-            "position_imbalance_limit": 3,  # 注文偏り上限
-            
-            # 自動復帰設定
-            "cooldown_period_minutes": 45,
-            "max_cooldown_minutes": 75,
-            "stability_check_period_minutes": 60,
-            "stability_threshold": 0.02,
-            "min_resume_balance": 8.5,  # -50%対応
-            "max_consecutive_errors": 5,
-            "force_resume_after_max": True,
-            
-            # Phase切り替え
-            "phase2_threshold": 20.0,  # $20でPhase2へ
-            "phase3_threshold": 30.0,  # $30でPhase3へ（将来用）
-            
-            # オプション
-            "slack_webhook": None,
-        }
+    except Exception as e:
+        logger.warning(f"⚠️ レバレッジ同期エラー: {e}")
+        logger.info(f"→ デフォルト{bot.leverage}倍を使用")
+
+async def check_api_version(bot: CaptainGridBot):
+    """EdgeX APIバージョンチェック（V2移行監視）"""
+    try:
+        # ヘルスチェックまたはシステム情報でバージョン確認
+        # 現在はV1固定、V2が来たら警告
+        logger.info("📡 EdgeX API接続確認中...")
         
-        logger.info("🔥🔥🔥 Captain Grid Bot - $17微益モード版 🔥🔥🔥")
-        logger.info(f"📍 接続先: {config['base_url']}")
-        logger.info(f"🆔 Account ID: {config['account_id']}")
-        logger.info(f"💰 最終資金: ${config['initial_balance']}（追加入金なし）")
-        logger.info(f"💵 注文サイズ: ${config['order_size_usdt']}固定")
-        logger.info(f"🎯 毎日目標: $0.001-0.01の微益！勝ち体験重視！")
-        logger.info(f"🛡️ 急落検知: {config['volatility_threshold']*100}%/{config['volatility_check_interval']}秒")
-        logger.info(f"🛡️ ジワ下落検知: {config['gradual_decline_threshold']*100}%/{config['gradual_decline_window']//60}分")
-        logger.info(f"🛡️ 損失上限: -{config['loss_limit']*100}%（半損許容）")
-        logger.info(f"📐 グリッド幅: {config['grid_interval_percentage']*100}%（狭め＝注文入りやすい）")
-        logger.info(f"🎄 クリスマス期間: 手動監視を推奨します")
-        logger.info(f"⚠️ 重要指標日: 相談してから稼働！")
-        logger.warning("🔴 本番モードで起動！")
+        # 価格取得でAPI接続テスト
+        ticker = await bot.client.get_ticker(contract_id=bot.contract_id)
         
+        if ticker and isinstance(ticker, dict) and ticker.get("code") == "SUCCESS":
+            logger.info("✅ EdgeX API V1接続成功")
+            
+            # V2チェック（将来用）
+            api_version = ticker.get("version", "V1")
+            if api_version != "V1":
+                logger.warning(f"⚠️ 新バージョン検知: {api_version}")
+                logger.warning("⚠️ ボットの互換性を確認してください！")
+        else:
+            logger.warning("⚠️ API接続テスト: レスポンス異常")
+            
+    except Exception as e:
+        logger.error(f"❌ API接続確認エラー: {e}")
+        raise
+
+async def main():
+    """メイン処理"""
+    try:
+        logger.info("=" * 70)
+        logger.info("🏴‍☠️ Captain Grid Bot - EdgeX 2026 Edition")
+        logger.info("=" * 70)
+        
+        # 設定読み込み
+        logger.info("📋 設定読み込み中...")
+        config = get_config()
+        validate_config(config)
+        
+        # 環境情報表示
+        env_type = "🧪 TESTNET" if config["is_testnet"] else "🚀 PRODUCTION"
+        logger.info(f"🌍 環境: {env_type}")
+        logger.info(f"🔗 Base URL: {config['base_url']}")
+        logger.info(f"👤 Account ID: {config['account_id']}")
+        logger.info(f"💱 Symbol: {config['symbol']} (Contract: {config['contract_id']})")
+        logger.info(f"📊 グリッド: {config['grid_count']}本 × ${config['grid_interval']:.1f}幅")
+        logger.info(f"💰 初期残高: ${config['initial_balance']:.2f}")
+        logger.info(f"💵 注文サイズ: ${config['order_size_usdt']:.2f}/注文")
+        
+        if config["is_testnet"]:
+            logger.warning("⚠️ テストネットモードで稼働中")
+            logger.warning("⚠️ 本番デプロイ時は EDGEX_BASE_URL を変更してください")
+        
+        # Botインスタンス作成
+        logger.info("🤖 Bot初期化中...")
         bot = CaptainGridBot(config)
+        
+        # API接続確認
+        await check_api_version(bot)
+        
+        # レバレッジ同期
+        await sync_leverage(bot)
+        
+        # Rate Limit警告
+        logger.info("=" * 70)
+        logger.info("⚠️ EdgeX Rate Limit: 2 operations/2 seconds")
+        logger.info("⚠️ ボットは自動的に待機時間を挿入します")
+        logger.info("=" * 70)
+        
+        # V2移行予定の通知
+        logger.info("=" * 70)
+        logger.info("📢 EdgeX V2 API: 2026 Q1予定")
+        logger.info("📢 V1は継続稼働中、移行時は設定確認推奨")
+        logger.info("=" * 70)
+        
+        # Bot実行
+        logger.info("🚀 Captain Grid Bot 起動！")
+        logger.info("=" * 70)
         await bot.run()
         
-    except ValueError as e:
-        logger.error(f"❌ 設定エラー: {e}")
+    except KeyboardInterrupt:
+        logger.info("=" * 70)
+        logger.info("⛔ ユーザーによる停止")
+        logger.info("=" * 70)
     except Exception as e:
-        logger.error(f"❌ 予期しないエラー: {e}")
+        logger.error("=" * 70)
+        logger.error(f"❌ 致命的エラー: {e}")
+        logger.error("=" * 70)
         raise
+    finally:
+        logger.info("=" * 70)
+        logger.info("👋 Captain Grid Bot 終了")
+        logger.info("=" * 70)
 
 if __name__ == "__main__":
     asyncio.run(main())

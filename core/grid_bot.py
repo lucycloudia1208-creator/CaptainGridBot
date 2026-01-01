@@ -1,7 +1,7 @@
 """
 Captain Grid Bot - $17微益モード版
 半損許容・毎日稼ぐ・最小ロット強制配置
-EdgeX SDK 0.1.0対応
+EdgeX SDK 0.1.0対応 - 2026年1月API仕様完全対応版
 """
 import asyncio
 import aiohttp
@@ -23,6 +23,8 @@ class CaptainGridBot:
         account_id = config["account_id"]
         if isinstance(account_id, str):
             account_id = int(account_id)
+        
+        self.account_id = account_id  # インスタンス変数として保存
         
         self.client = Client(
             base_url=config["base_url"],
@@ -96,18 +98,23 @@ class CaptainGridBot:
         logger.info(f"⚠️ 重要指標日: 必ず相談してから稼働！")
     
     async def get_balance(self) -> float:
-        """残高取得（異常値ハンドリング付き）"""
+        """残高取得（2026年1月API仕様対応・異常値ハンドリング付き）"""
         try:
-            acc = await self.client.get_account_asset()
+            # 最新API仕様: account_idを明示的に渡す
+            acc = await self.client.get_account_asset(account_id=self.account_id)
             
             if isinstance(acc, dict):
+                # data.collateralList から取得
                 collateral_list = acc.get("data", {}).get("collateralList", [])
             else:
                 collateral_list = []
             
+            # coinId == "USDT" でフィルタ（2026年1月仕様）
             for item in collateral_list:
-                if str(item.get("coinId")) == "1000":
-                    balance = float(item.get("amount", 0))
+                coin_id = str(item.get("coinId", ""))
+                if coin_id == "USDT":
+                    # amount は文字列で返ってくるため float() で変換
+                    balance = float(item.get("amount", "0"))
                     
                     # 異常値チェック
                     if balance < 0:
@@ -123,6 +130,8 @@ class CaptainGridBot:
                     logger.debug(f"💰 残高確認: ${balance:.2f} USDT")
                     return balance
             
+            # USDT が見つからない場合
+            logger.warning(f"⚠️ USDT残高が見つかりません。collateralList: {collateral_list}")
             return 0.0
             
         except Exception as e:
@@ -130,9 +139,14 @@ class CaptainGridBot:
             return self.last_valid_balance if self.last_valid_balance else 0.0
     
     async def check_position_imbalance(self) -> tuple:
-        """ネットポジション偏りチェック（注文本数ベース）"""
+        """ネットポジション偏りチェック（2026年1月API仕様対応・注文本数ベース）"""
         try:
-            orders_resp = await self.client.get_active_orders()
+            # 最新API仕様: account_id と filter_contract_id_list を必須で渡す
+            orders_resp = await self.client.get_active_orders(
+                account_id=self.account_id,
+                filter_contract_id_list=[int(self.contract_id)],  # BTC-USDT: 10000001
+                size=50  # 最大50件取得
+            )
             
             if isinstance(orders_resp, dict):
                 orders = orders_resp.get("data", [])
@@ -141,7 +155,7 @@ class CaptainGridBot:
             else:
                 orders = []
             
-            # contract_idでフィルタ
+            # contract_idでフィルタ（念のため再確認）
             filtered_orders = [o for o in orders if str(o.get("contractId")) == self.contract_id]
             
             buy_count = 0
@@ -196,58 +210,57 @@ class CaptainGridBot:
             grid_interval = btc_price * 0.0005   # 0.05%
         else:  # Phase3（将来用）
             grid_count = 4
-            grid_interval = btc_price * 0.0004
+            grid_interval = btc_price * 0.0004   # 0.04%
         
-        grid_interval = round(grid_interval, 1)  # 小数点1桁に丸め
-        
-        logger.info(f"📐 Phase{self.current_phase} グリッド: {grid_count}本 × ${grid_interval:.1f}幅")
+        logger.info(f"🎯 Phase {self.current_phase}: {grid_count}本 × ${grid_interval:.1f}幅")
+        logger.info(f"💰 残高: ${balance:.2f} USDT")
         
         return grid_count, grid_interval
     
     async def get_price(self) -> Optional[float]:
-        """価格取得（Binance）"""
+        """現在価格取得"""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        price = float(data["price"])
-                        self.last_valid_price = price
-                        logger.info(f"💹 価格: ${price:.2f}")
-                        return price
+            ticker = await self.client.get_ticker(contract_id=str(self.contract_id))
+            
+            if isinstance(ticker, dict):
+                data = ticker.get("data", {})
+            else:
+                data = ticker if hasattr(ticker, "get") else {}
+            
+            # markPrice または lastPrice
+            price = data.get("markPrice") or data.get("lastPrice")
+            
+            if price:
+                price_float = float(price)
+                self.last_valid_price = price_float
+                return price_float
+            
+            return self.last_valid_price
+            
         except Exception as e:
             logger.error(f"❌ 価格取得エラー: {e}")
-        
-        if self.last_valid_price:
-            logger.warning(f"⚠️ 最後の有効価格使用: ${self.last_valid_price:.2f}")
             return self.last_valid_price
-        
-        return None
     
     def record_price(self, price: float):
         """価格履歴記録"""
         now = datetime.now()
         self.price_history.append((now, price))
         
-        # 古いデータ削除（1時間以上前）
-        cutoff = now - timedelta(hours=1)
-        self.price_history = [(t, p) for t, p in self.price_history if t > cutoff]
+        # 古い履歴削除（10分以上前）
+        cutoff = now - timedelta(minutes=10)
+        self.price_history = [
+            (t, p) for t, p in self.price_history if t > cutoff
+        ]
     
     async def check_volatility(self, current_price: float) -> bool:
-        """急落検知（30秒3%）"""
+        """急落検知（3%以上）"""
         if self.previous_price is None:
-            self.previous_price = current_price
             return False
         
-        price_change_rate = abs(current_price - self.previous_price) / self.previous_price
+        change_rate = (current_price - self.previous_price) / self.previous_price
         
-        if price_change_rate >= self.volatility_threshold:
-            logger.critical(f"🚨 急落検知！")
-            logger.critical(f"📊 前回チェックから{price_change_rate*100:.2f}%変動")
-            logger.critical(f"💹 ${self.previous_price:.2f} → ${current_price:.2f}")
+        if change_rate < -self.volatility_threshold:
+            logger.warning(f"🚨 急落検知: {change_rate*100:.2f}%")
             await self.emergency_stop("急落検知")
             return True
         
@@ -255,185 +268,142 @@ class CaptainGridBot:
         return False
     
     async def check_gradual_decline(self) -> bool:
-        """ジワ下落検知（10分1%）"""
+        """ジワ下落検知（10分で1%以上）"""
         if len(self.price_history) < 2:
             return False
         
-        # 10分前のデータ取得
-        cutoff = datetime.now() - timedelta(seconds=self.gradual_decline_window)
-        old_data = [(t, p) for t, p in self.price_history if t <= cutoff]
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=self.gradual_decline_window)
         
-        if not old_data:
+        old_prices = [p for t, p in self.price_history if t < cutoff]
+        if not old_prices:
             return False
         
-        # 10分前の価格
-        old_price = old_data[-1][1]
+        oldest_price = old_prices[0]
         current_price = self.price_history[-1][1]
         
-        # 下落率計算
-        decline_rate = (old_price - current_price) / old_price
+        decline_rate = (current_price - oldest_price) / oldest_price
         
-        if decline_rate >= self.gradual_decline_threshold:
-            logger.critical(f"🚨 ジワ下落検知！")
-            logger.critical(f"📊 {self.gradual_decline_window//60}分で{decline_rate*100:.2f}%下落")
-            logger.critical(f"💹 ${old_price:.2f} → ${current_price:.2f}")
+        if decline_rate < -self.gradual_decline_threshold:
+            logger.warning(f"🚨 ジワ下落検知: {decline_rate*100:.2f}%（{self.gradual_decline_window}秒間）")
             await self.emergency_stop("ジワ下落検知")
             return True
         
         return False
     
     async def check_loss_limit(self, balance: float) -> bool:
-        """損失上限チェック（-50%）"""
-        if balance < self.initial_balance * (1 - self.loss_limit):
-            loss_rate = (self.initial_balance - balance) / self.initial_balance
-            logger.critical(f"🚨 損失上限到達！")
-            logger.critical(f"📊 損失率: {loss_rate*100:.1f}%")
-            logger.critical(f"💰 ${self.initial_balance:.2f} → ${balance:.2f}")
-            await self.emergency_stop(f"損失上限（-{self.loss_limit*100}%）")
+        """損失上限チェック（50%）"""
+        loss_rate = (self.initial_balance - balance) / self.initial_balance
+        
+        if loss_rate >= self.loss_limit:
+            logger.warning(f"🚨 損失上限到達: {loss_rate*100:.1f}%")
+            await self.emergency_stop("損失上限到達")
             return True
         
         return False
     
-    async def check_market_stability(self) -> bool:
-        """市場安定性判定"""
-        if len(self.price_history) < 2:
-            return False
-        
-        cutoff = datetime.now() - timedelta(minutes=self.stability_check_period_minutes)
-        recent_data = [(t, p) for t, p in self.price_history if t >= cutoff]
-        
-        if len(recent_data) < 2:
-            return False
-        
-        prices = [p for _, p in recent_data]
-        max_price = max(prices)
-        min_price = min(prices)
-        avg_price = sum(prices) / len(prices)
-        
-        volatility = (max_price - min_price) / avg_price
-        is_stable = volatility <= self.stability_threshold
-        
-        if is_stable:
-            logger.info(f"✅ 市場安定: {self.stability_check_period_minutes}分で{volatility*100:.2f}%変動")
-        else:
-            logger.warning(f"⚠️ 市場不安定: {self.stability_check_period_minutes}分で{volatility*100:.2f}%変動")
-        
-        return is_stable
-    
     async def emergency_stop(self, reason: str):
         """緊急停止"""
-        logger.critical(f"🚨🚨🚨 緊急停止: {reason} 🚨🚨🚨")
+        if self.trading_paused:
+            return
+        
+        logger.warning(f"⛔ 緊急停止: {reason}")
+        
+        self.trading_paused = True
+        self.pause_start_time = datetime.now()
+        self.pause_reason = reason
         
         try:
             await self.cancel_all()
-            await asyncio.sleep(1)
-            
-            self.trading_paused = True
-            self.pause_start_time = datetime.now()
-            self.pause_reason = reason
-            
-            logger.critical(f"⛔ 取引停止完了")
-            logger.critical(f"❄️ 冷却: {self.cooldown_period_minutes}分")
-            
-            if self.slack_webhook:
-                send_slack_notification(self.slack_webhook, f"🚨 緊急停止: {reason}")
-            
+            logger.info("✅ 全注文キャンセル完了")
         except Exception as e:
-            logger.error(f"❌ 緊急停止エラー: {e}")
+            logger.error(f"❌ 注文キャンセル失敗: {e}")
+        
+        if self.slack_webhook:
+            await send_slack_notification(
+                self.slack_webhook,
+                f"⛔ Captain Bot緊急停止: {reason}"
+            )
     
     async def auto_resume_check(self):
-        """自動再開チェック"""
+        """自動復帰チェック"""
         if not self.trading_paused or not self.pause_start_time:
             return
         
-        elapsed = (datetime.now() - self.pause_start_time).total_seconds() / 60
+        elapsed = datetime.now() - self.pause_start_time
+        elapsed_minutes = elapsed.total_seconds() / 60
         
-        if elapsed < self.cooldown_period_minutes:
-            remaining = self.cooldown_period_minutes - elapsed
-            logger.info(f"❄️ 冷却中... あと{remaining:.1f}分")
+        # 最大待機時間超過
+        if elapsed_minutes > self.max_cooldown_minutes:
+            if self.force_resume_after_max:
+                logger.info(f"🔄 最大待機時間超過（{elapsed_minutes:.1f}分）→ 強制復帰")
+                await self.resume_trading()
+            else:
+                logger.warning(f"⛔ 最大待機時間超過（{elapsed_minutes:.1f}分）→ 手動復帰待ち")
             return
         
-        # 強制再開
-        if elapsed >= self.max_cooldown_minutes:
-            if self.force_resume_after_max:
-                logger.warning(f"⚠️ 最大冷却期間到達")
-                logger.info(f"🔥 強制再開")
-                
-                balance = await self.get_balance()
-                if balance < self.min_resume_balance:
-                    logger.error(f"❌ 残高不足: ${balance:.2f} < ${self.min_resume_balance}")
-                    return
-                
-                await self.resume_trading()
-                return
+        # クールダウン期間中
+        if elapsed_minutes < self.cooldown_period_minutes:
+            logger.info(f"⏳ クールダウン中: {elapsed_minutes:.1f}/{self.cooldown_period_minutes}分")
+            return
         
-        # 通常再開
+        # 安定性チェック
+        cutoff = datetime.now() - timedelta(minutes=self.stability_check_period_minutes)
+        recent_prices = [p for t, p in self.price_history if t > cutoff]
+        
+        if len(recent_prices) < 2:
+            logger.info("⏳ 安定性チェック: データ不足")
+            return
+        
+        max_price = max(recent_prices)
+        min_price = min(recent_prices)
+        volatility = (max_price - min_price) / min_price
+        
+        if volatility > self.stability_threshold:
+            logger.info(f"⏳ 安定性チェック: ボラティリティ高い ({volatility*100:.2f}%)")
+            return
+        
+        # 残高チェック
         balance = await self.get_balance()
         if balance < self.min_resume_balance:
-            logger.warning(f"⚠️ 残高不足: ${balance:.2f}")
+            logger.warning(f"⛔ 残高不足で復帰不可: ${balance:.2f} < ${self.min_resume_balance}")
             return
         
-        if await self.check_market_stability():
-            logger.info(f"✅ 市場安定 → 再開！")
-            await self.resume_trading()
-        else:
-            remaining = self.max_cooldown_minutes - elapsed
-            logger.info(f"⚠️ 不安定 → 待機（あと{remaining:.1f}分で強制）")
+        logger.info(f"✅ 安定性確認 → 自動復帰")
+        await self.resume_trading()
     
     async def resume_trading(self):
         """取引再開"""
-        try:
+        logger.info("🔄 取引再開")
+        
+        self.trading_paused = False
+        self.pause_start_time = None
+        self.pause_reason = ""
+        self.consecutive_errors = 0
+        
+        price = await self.get_price()
+        if price:
             balance = await self.get_balance()
-            
-            if balance < self.min_resume_balance:
-                logger.error(f"❌ 残高不足: ${balance:.2f}")
-                return
-            
-            current_price = await self.get_price()
-            if not current_price:
-                logger.error("❌ 価格取得失敗")
-                return
-            
             self.current_grid_count, self.current_grid_interval = self.calculate_grid_settings(
-                balance, current_price
+                balance, price
             )
-            
-            self.trading_paused = False
-            self.pause_start_time = None
-            self.consecutive_errors = 0
-            
-            logger.info(f"✅ 取引再開！")
-            logger.info(f"💰 残高: ${balance:.2f}")
-            
-            await self.place_grid(current_price)
-            
-            if self.slack_webhook:
-                send_slack_notification(self.slack_webhook, f"✅ 再開: ${balance:.2f}")
-            
-        except Exception as e:
-            logger.error(f"❌ 再開エラー: {e}")
-    
-    async def initialize(self):
-        """初期化"""
-        try:
-            balance = await self.get_balance()
-            
-            logger.info(f"💰 USDT残高: ${balance:.2f}")
-            logger.info(f"📋 契約ID: {self.contract_id}")
-            
-            if balance < self.min_resume_balance:
-                logger.warning(f"⚠️ 残高: ${balance:.2f} < ${self.initial_balance}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ 初期化エラー: {e}")
-            raise
+            await self.place_grid(price)
+        
+        if self.slack_webhook:
+            await send_slack_notification(
+                self.slack_webhook,
+                "🔄 Captain Bot取引再開"
+            )
     
     async def cancel_all(self):
-        """全注文キャンセル"""
+        """全注文キャンセル（2026年1月API仕様対応）"""
         try:
-            orders_resp = await self.client.get_active_orders()
+            # 最新API仕様: account_id と filter_contract_id_list を必須で渡す
+            orders_resp = await self.client.get_active_orders(
+                account_id=self.account_id,
+                filter_contract_id_list=[int(self.contract_id)],  # BTC-USDT: 10000001
+                size=50  # 最大50件取得
+            )
             
             if isinstance(orders_resp, dict):
                 orders = orders_resp.get("data", [])
@@ -442,28 +412,41 @@ class CaptainGridBot:
             else:
                 orders = []
             
-            # contract_idでフィルタ
+            # contract_idでフィルタ（念のため再確認）
             filtered_orders = [o for o in orders if str(o.get("contractId")) == self.contract_id]
             
             if not filtered_orders:
-                logger.info("📭 キャンセル対象なし")
+                logger.info("📝 キャンセル対象なし")
                 return
             
             logger.info(f"🗑️ {len(filtered_orders)}件キャンセル中...")
             
             for order in filtered_orders:
                 try:
-                    order_id = order.get("orderId") or order.get("id")
-                    if order_id:
-                        await self.client.cancel_order(order_id=str(order_id))
-                        await asyncio.sleep(0.2)
+                    order_id = str(order.get("orderId"))
+                    await self.client.cancel_order(
+                        contract_id=str(self.contract_id),
+                        order_id=order_id
+                    )
+                    logger.debug(f"✅ キャンセル: {order_id}")
+                    await asyncio.sleep(0.2)  # Rate limit対策
                 except Exception as e:
-                    logger.warning(f"⚠️ キャンセル失敗: {e}")
+                    logger.error(f"❌ キャンセル失敗: {e}")
             
-            logger.info("✅ キャンセル完了")
+            logger.info("✅ 全キャンセル完了")
             
         except Exception as e:
-            logger.error(f"❌ キャンセルエラー: {e}")
+            logger.error(f"❌ 全キャンセルエラー: {e}")
+    
+    async def initialize(self):
+        """初期化処理"""
+        logger.info("🔄 初期化中...")
+        
+        # 既存注文クリア
+        await self.cancel_all()
+        await asyncio.sleep(1)
+        
+        logger.info("✅ 初期化完了")
     
     async def place_grid(self, center_price: float):
         """グリッド配置（微益モード・最小ロット強制配置）"""
@@ -525,7 +508,7 @@ class CaptainGridBot:
                     )
                     placed_count += 1
                     logger.info(f"✅ 買い: {size_btc} BTC @ ${buy_price:.1f}")
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.3)  # Rate limit対策
                 except Exception as e:
                     logger.error(f"❌ 買い失敗: {e}")
             else:
@@ -543,7 +526,7 @@ class CaptainGridBot:
                     )
                     placed_count += 1
                     logger.info(f"✅ 売り: {size_btc} BTC @ ${sell_price:.1f}")
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.3)  # Rate limit対策
                 except Exception as e:
                     logger.error(f"❌ 売り失敗: {e}")
             else:
