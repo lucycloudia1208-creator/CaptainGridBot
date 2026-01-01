@@ -1,7 +1,7 @@
 """
 Captain Grid Bot - $17微益モード版
 半損許容・毎日稼ぐ・最小ロット強制配置
-EdgeX SDK 0.1.0+ 2026年1月API仕様完全対応版
+EdgeX SDK 0.3.0 2026年1月API仕様完全対応版
 """
 import asyncio
 import aiohttp
@@ -31,12 +31,12 @@ class CaptainGridBot:
             stark_private_key=config["stark_private_key"]
         )
         
-        # BTC-USDT固定
-        self.contract_id = 10000001  # ← intで固定（stringより安全）
+        # BTC-USDT固定（string化 - 2026年API仕様）
+        self.contract_id = "10000001"  # ← stringに変更
         self.symbol = config["symbol"]
         
         # 基本設定
-        self.initial_balance = float(config.get("initial_balance", 17.18))
+        self.initial_balance = float(config.get("initial_balance", 43.0))
         self.order_size_usdt = float(config["order_size_usdt"])
         self.slack_webhook = config.get("slack_webhook")
         
@@ -123,7 +123,7 @@ class CaptainGridBot:
         try:
             orders_resp = await self.client.get_active_orders(
                 account_id=self.account_id,
-                filter_contract_id_list=[self.contract_id],  # ← intで渡す！！
+                filter_contract_id_list=[int(self.contract_id)],  # intに変換して渡す
                 size=50
             )
             
@@ -132,7 +132,8 @@ class CaptainGridBot:
                 return False, 0
             
             orders = orders_resp.get("data", [])
-            filtered_orders = [o for o in orders if o.get("contractId") == self.contract_id]
+            # contract_idは文字列で比較
+            filtered_orders = [o for o in orders if str(o.get("contractId")) == self.contract_id]
             
             buy_count = sum(1 for o in filtered_orders if o.get("side") in ["BUY", 1])
             sell_count = sum(1 for o in filtered_orders if o.get("side") in ["SELL", 2])
@@ -149,7 +150,50 @@ class CaptainGridBot:
             logger.error(f"❌ 偏りチェックエラー: {e}")
             return False, 0
 
+    async def cancel_all(self):
+        """全注文キャンセル（2026年API仕様対応）"""
+        try:
+            logger.info("🗑️ 全注文キャンセル開始...")
+            
+            # アクティブ注文取得
+            orders_resp = await self.client.get_active_orders(
+                account_id=self.account_id,
+                filter_contract_id_list=[int(self.contract_id)],
+                size=50
+            )
+            
+            if not isinstance(orders_resp, dict) or orders_resp.get("code") != "SUCCESS":
+                logger.warning(f"⚠️ 注文取得失敗: {orders_resp}")
+                return
+            
+            orders = orders_resp.get("data", [])
+            filtered_orders = [o for o in orders if str(o.get("contractId")) == self.contract_id]
+            
+            if not filtered_orders:
+                logger.info("📝 キャンセル対象の注文なし")
+                return
+            
+            logger.info(f"🗑️ {len(filtered_orders)}件の注文をキャンセル中...")
+            
+            for order in filtered_orders:
+                try:
+                    order_id = str(order.get("orderId"))
+                    await self.client.cancel_order(
+                        contract_id=self.contract_id,
+                        order_id=order_id
+                    )
+                    logger.debug(f"✅ キャンセル完了: {order_id}")
+                    await asyncio.sleep(0.2)  # Rate limit対策
+                except Exception as e:
+                    logger.error(f"❌ 注文キャンセル失敗 ({order_id}): {e}")
+            
+            logger.info("✅ 全注文キャンセル完了")
+            
+        except Exception as e:
+            logger.error(f"❌ 全注文キャンセルエラー: {e}")
+
     def update_phase(self, balance: float):
+        """Phase自動更新"""
         old_phase = self.current_phase
         if balance >= self.phase3_threshold:
             self.current_phase = 3
@@ -162,6 +206,7 @@ class CaptainGridBot:
             logger.info(f"🎯 Phase {old_phase} → Phase {self.current_phase} 切り替え！")
 
     def calculate_grid_settings(self, balance: float, btc_price: float) -> Tuple[int, float]:
+        """Phase対応のグリッド設定計算"""
         self.update_phase(balance)
         
         if self.current_phase == 1:
@@ -180,18 +225,22 @@ class CaptainGridBot:
         return grid_count, grid_interval
 
     async def get_price(self) -> Optional[float]:
+        """現在価格取得（aiohttp直叩き）"""
         try:
-            ticker = await self.client.get_ticker(contract_id=self.contract_id)  # ← intで渡す！！
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.config['base_url']}/api/v1/public/ticker?contractId={self.contract_id}"
+                async with session.get(url, timeout=15) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("code") == "SUCCESS":
+                            price_data = data.get("data", {})
+                            price = price_data.get("markPrice") or price_data.get("lastPrice")
+                            if price:
+                                price_float = float(price)
+                                self.last_valid_price = price_float
+                                return price_float
             
-            if isinstance(ticker, dict) and ticker.get("code") == "SUCCESS":
-                data = ticker.get("data", {})
-                price = data.get("markPrice") or data.get("lastPrice")
-                if price:
-                    price_float = float(price)
-                    self.last_valid_price = price_float
-                    return price_float
-            
-            logger.warning(f"⚠️ 価格取得失敗: {ticker}")
+            logger.warning(f"⚠️ 価格取得失敗")
             return self.last_valid_price
             
         except Exception as e:
@@ -199,6 +248,7 @@ class CaptainGridBot:
             return self.last_valid_price
 
     async def place_grid(self, center_price: float):
+        """グリッド配置（微益モード）"""
         if not self.current_grid_count or not self.current_grid_interval:
             balance = await self.get_balance()
             self.current_grid_count, self.current_grid_interval = self.calculate_grid_settings(balance, center_price)
@@ -262,6 +312,6 @@ class CaptainGridBot:
         logger.info(f"🎯 グリッド配置完了: {placed}件（強制配置: {forced}件）")
 
     async def run(self):
-        # （main.pyから呼び出されるメインループはそのまま）
-        # ここは変更不要（元のコードのまま完璧）
-        pass  # 省略（元のrun()をそのまま使用）
+        """メインループ（main.pyから呼び出し）"""
+        # main.pyでループ管理するため、ここは空のまま
+        pass
