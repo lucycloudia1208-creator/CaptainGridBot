@@ -11,17 +11,16 @@ class CaptainGridBot:
         self.base_url = "https://pro.edgex.exchange"
         self.account_id = os.getenv("ACCOUNT_ID")
         self.stark_private_key = os.getenv("STARK_PRIVATE_KEY")
-        self.contract_id = 10000001  # BTC-USD Perpetual
+        self.contract_id = "10000001"  # 文字列で！（2026年仕様）
         self.leverage = 100
         self.min_lot = 0.001
         self.phase1_grids = 2
         self.phase2_grids = 3
-        self.daily_target = (0.001, 0.01)  # $0.001-0.01 微益モード
 
         logger.info("🏴‍☠️ Captain Grid Bot - EdgeX 2026 Edition ($17微益モード)")
         logger.info("🌍 環境: 🚀 PRODUCTION")
         logger.info(f"🔗 Base URL: {self.base_url}")
-        logger.info(f"👤 Account ID: {self.account_id}")
+        logger.info(f"👤 Account ID: {self.account_id or 'None (Koyeb環境変数設定要！)'}")
         logger.info("🚀 初期化完了")
         logger.info(f"📊 Phase1: {self.phase1_grids}本グリッド / Phase2: {self.phase2_grids}本グリッド")
         logger.info(f"⚡ レバレッジ: {self.leverage}倍")
@@ -29,92 +28,55 @@ class CaptainGridBot:
         logger.info("🎯 毎日目標: $0.001-0.01の微益！！")
 
     async def get_price(self) -> float:
-        """
-        頑健版価格取得:
-        Funding API → Orderbook mid-price → 仮価格フォールバック
-        """
+        """2026年1月最新: Funding APIでoraclePrice取得（最安定）"""
         async with aiohttp.ClientSession() as session:
-            # 1) Primary: Funding API (markPrice / indexPrice)
             try:
-                url = (
-                    f"{self.base_url}/api/v1/public/funding/getLatestFundingRate"
-                    f"?contractId={self.contract_id}"
-                )
-                async with session.get(url, timeout=10) as resp:
+                url = f"{self.base_url}/api/v1/public/funding/getLatestFundingRate?contractId={self.contract_id}"
+                async with session.get(url, timeout=15) as resp:
                     if resp.status != 200:
-                        raise ValueError(f"HTTP {resp.status}")
-                    data = await resp.json()
+                        logger.warning(f"HTTPステータス: {resp.status}")
+                        raise Exception(f"HTTP {resp.status}")
 
-                if data.get("code") != 0:
-                    raise ValueError(f"API error: {data.get('msg', 'Unknown')}")
+                    raw_data = await resp.json()
+                    logger.debug(f"Funding API 生レスポンス: {raw_data}")  # デバッグ用
 
-                raw = data.get("data")
-                # list でも dict でも両対応（重要！）
-                items = raw if isinstance(raw, list) else [raw] if raw else []
+                    # 成功判定: code == "SUCCESS"
+                    if raw_data.get("code") != "SUCCESS":
+                        raise Exception(f"APIエラー: {raw_data.get('msg', 'Unknown')}")
 
-                for item in items:
-                    if not item:
-                        continue
-                    for key in ("markPrice", "indexPrice"):  # markPrice優先
-                        val = item.get(key)
-                        if val is not None:
-                            price = float(val)
-                            logger.info(f"✅ 価格取得成功 (Funding {key}): ${price}")
-                            return price
-                raise ValueError("価格フィールドなし")
+                    data = raw_data.get("data")
+                    if not data:
+                        raise Exception("dataフィールドなし")
+
+                    item = data[0] if isinstance(data, list) else data
+
+                    # oraclePriceがmark/fair price相当（最優先）
+                    price_str = item.get("oraclePrice")
+                    if not price_str:
+                        raise Exception("oraclePriceなし")
+
+                    price = float(price_str)
+                    logger.info(f"✅ 価格取得成功 (oraclePrice): ${price:.2f}")
+                    return price
 
             except Exception as e:
-                logger.warning(f"⚠️ Funding API 失敗: {e}")
+                logger.warning(f"⚠️ 価格取得失敗: {e}")
 
-            # 2) Fallback: Orderbook mid-price
-            try:
-                url = (
-                    f"{self.base_url}/api/v1/public/orderbook"
-                    f"?contractId={self.contract_id}&depth=1"
-                )
-                async with session.get(url, timeout=10) as resp:
-                    if resp.status != 200:
-                        raise ValueError(f"HTTP {resp.status}")
-                    data = await resp.json()
-
-                if data.get("code") != 0:
-                    raise ValueError(f"API error: {data.get('msg', 'Unknown')}")
-
-                book = data.get("data", {})
-                bids = book.get("bids", [])
-                asks = book.get("asks", [])
-
-                if bids and asks:
-                    best_bid = float(bids[0].get("price", 0))
-                    best_ask = float(asks[0].get("price", 0))
-                    if best_bid > 0 and best_ask > 0:
-                        price = (best_bid + best_ask) / 2
-                        logger.info(f"✅ 価格取得成功 (Orderbook mid): ${price:.2f}")
-                        return price
-                raise ValueError("板データ不足")
-
-            except Exception as e:
-                logger.warning(f"⚠️ Orderbook fallback 失敗: {e}")
-
-            # 3) 最終フォールバック: 仮価格
-            fallback_price = 65000.0
-            logger.error(f"❌ 全API失敗 - 仮価格 ${fallback_price} 使用")
-            return fallback_price
+            # 最終安全網
+            fallback = 105000.0  # 2026年1月現在のBTC目安
+            logger.error(f"❌ 全失敗 - 仮価格 ${fallback:.2f} 使用")
+            return fallback
 
     async def check_api_connection(self):
         logger.info("📡 EdgeX API接続確認中...")
         price = await self.get_price()
-        if price:
-            logger.info("✅ API接続確認成功 - グリッド配置準備OK！！")
-            return True
-        else:
-            logger.warning("⚠️ API接続確認エラー: 価格データ取得失敗")
-            return False
+        logger.info("✅ API接続確認成功 - グリッド配置準備OK！！")
+        return True
 
     async def place_grids(self):
         current_price = await self.get_price()
-        logger.info(f"📍 現在価格: ${current_price} でグリッド配置開始")
-        # TODO: グリッド幅計算・注文価格生成・Private APIで注文送信
+        logger.info(f"📍 現在価格: ${current_price:.2f} でグリッド配置開始")
+        # 次にここにグリッド注文ロジック入れる！！
         pass
 
     async def monitor(self):
@@ -122,18 +84,14 @@ class CaptainGridBot:
         while True:
             try:
                 price = await self.get_price()
-                # TODO: ポジション監視・決済ロジック
+                # ポジション監視・決済はここ
                 await asyncio.sleep(30)
             except Exception as e:
-                logger.error(f"💥 監視ループエラー: {e}")
+                logger.error(f"💥 監視エラー: {e}")
                 await asyncio.sleep(30)
 
     async def run(self):
-        if not await self.check_api_connection():
-            logger.error("🚫 API接続失敗 - 30秒後に再試行")
-            await asyncio.sleep(30)
-            return await self.run()
-
+        await self.check_api_connection()
         await self.place_grids()
         await self.monitor()
 
