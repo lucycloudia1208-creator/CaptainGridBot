@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.grid_bot import CaptainGridBot
-from utils.config import get_config, validate_config
+from utils.config import get_config
 from utils.logger import setup_logger
 
 logger = setup_logger()
