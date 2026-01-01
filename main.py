@@ -77,8 +77,7 @@ async def main():
         # 設定読み込み
         logger.info("📋 設定読み込み中...")
         config = get_config()
-        validate_config(config)
-        
+    
         # 環境情報表示
         env_type = "🧪 TESTNET" if config["is_testnet"] else "🚀 PRODUCTION"
         logger.info(f"🌍 環境: {env_type}")
