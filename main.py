@@ -1,149 +1,119 @@
 """
 Captain Grid Bot エントリーポイント
-EdgeX 2026年1月版 - レバレッジ同期対応 + 完全互換修正
+EdgeX 2026年1月版 - レバレッジ同期対応 + 完全互換修正 + SDK廃止対策
 """
 import asyncio
 import sys
+import aiohttp
 from pathlib import Path
+from datetime import datetime
 
-# プロジェクトルートをパスに追加
+# プロジェクトルート追加
 sys.path.insert(0, str(Path(__file__).parent))
 
+# インポート
 from core.grid_bot import CaptainGridBot
-from utils.config import get_config, is_testnet  # ← is_testnet追加！！
+from utils.config import get_config, is_testnet
 from utils.logger import setup_logger
 
 logger = setup_logger()
 
-async def sync_leverage(bot: CaptainGridBot):
-    """EdgeX APIからレバレッジ設定を取得・同期"""
+async def check_api_connection(bot: CaptainGridBot):
+    """
+    EdgeX API接続確認（2026年仕様 - get_ticker廃止対策）
+    """
     try:
-        logger.info("🔧 レバレッジ設定を確認中...")
+        logger.info("📡 EdgeX API接続確認中...")
         
-        account_info = await bot.client.get_account_info(account_id=bot.account_id)
+        # BTC-USDT契約ID固定
+        bot.contract_id = 10000001
         
-        if isinstance(account_info, dict) and account_info.get("code") == "SUCCESS":
-            data = account_info.get("data", {})
-            api_leverage = data.get("leverage", 100)  # EdgeXは契約ごとorアカウント全体
-            
-            if api_leverage != bot.leverage:
-                logger.warning(f"⚠️ レバレッジ不一致: Bot={bot.leverage}倍 → API={api_leverage}倍に同期")
-                bot.leverage = api_leverage
-            else:
-                logger.info(f"✅ レバレッジ確認: {bot.leverage}倍（一致）")
-        else:
-            logger.warning("⚠️ アカウント情報取得失敗 → デフォルト100倍を使用")
-            
+        # public tickerで現在価格取得（認証不要・最安定）
+        async with aiohttp.ClientSession() as session:
+            url = f"{bot.config['base_url']}/api/v1/public/ticker?contractId=10000001"
+            async with session.get(url, timeout=15) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    price_data = data.get("data", {})
+                    price = price_data.get("markPrice") or price_data.get("lastPrice")
+                    if price:
+                        price = float(price)
+                        bot.last_valid_price = price
+                        logger.info(f"✅ EdgeX API接続成功 - 現在価格: ${price:.2f}")
+                        logger.info("✅ 契約ID: 10000001 (BTC-USDT)")
+                        return
+        raise Exception("価格データ取得失敗")
+        
     except Exception as e:
-        logger.warning(f"⚠️ レバレッジ同期エラー: {e} → デフォルト{bot.leverage}倍を使用")
+        logger.warning(f"⚠️ API接続確認エラー: {e}")
+        logger.warning("⚠️ 続行します（初回価格はget_priceで取得）")
+        bot.contract_id = 10000001
 
-async def check_api_version(bot: GridBot):
-    """
-    EdgeX API接続確認 + 契約ID取得（2026年仕様対応）
-    """
-    try:
-        # 2026年最新方式: 契約一覧からシンボルで検索
-        contracts = await bot.client.get_contracts()
-        target_contract = None
-        for contract in contracts:
-            if contract['symbol'] == bot.config["symbol"]:
-                target_contract = contract
-                break
-        
-        if not target_contract:
-            raise ValueError(f"❌ 契約が見つかりません: {bot.config['symbol']}")
-        
-        # 契約IDを設定
-        bot.contract_id = target_contract['id']
-        
-        # テストで現在価格取得（tickerの代わり）
-        ticker = await bot.client.get_ticker_price(contract_id=bot.contract_id)
-        # または get_market_ticker() など、SDK次第で名前が変わってる可能性あり
-        
-        logger.info(f"✅ EdgeX API接続成功 - 現在価格: ${ticker['price']}")
-        logger.info(f"✅ 契約ID取得: {bot.contract_id}")
-        
-    except Exception as e:
-        logger.error(f"❌ API接続確認エラー: {e}")
-        logger.error("==================================================================")
-        logger.error("❌ 致命的エラー: API接続失敗 - ボットを終了します")
-        logger.error("==================================================================")
-        raise SystemExit(1)
 async def main():
-    """メイン処理"""
+    logger.info("=" * 70)
+    logger.info("🏴‍☠️ Captain Grid Bot - EdgeX 2026 Edition ($17微益モード)")
+    logger.info("=" * 70)
+    
     try:
-        logger.info("=" * 70)
-        logger.info("🏴‍☠️ Captain Grid Bot - EdgeX 2026 Edition")
-        logger.info("=" * 70)
+        config = get_config()
         
-        logger.info("📋 設定読み込み中...")
-        raw_config = get_config()  # utils.configから取得
-        
-        # 環境判定（本番/テストネット）
-        is_test = is_testnet(raw_config["base_url"])
-        env_type = "🧪 TESTNET" if is_test else "🚀 PRODUCTION"
-        logger.info(f"🌍 環境: {env_type}")
-        
-        # CaptainGridBotが期待するキー形式に完全変換
-        config = {
-            "base_url": raw_config["base_url"],
-            "account_id": raw_config["account_id"],
-            "stark_private_key": raw_config["stark_private_key"],
-            "symbol": raw_config.get("symbol", "BTC-USDT"),
-            
-            # グリッド設定（最新ボットが期待するキー）
-            "grid_interval": raw_config.get("grid_interval", raw_config.get("GRID_INTERVAL_PERCENTAG", 100.0)),  # 互換性
-            "grid_count": raw_config.get("grid_count", raw_config.get("GRID_COUNT_PHASE1", 4) + raw_config.get("GRID_COUNT_PHASE2", 0)),
-            "order_size_usdt": raw_config.get("order_size_usdt", raw_config.get("ORDER_SIZE_USDT", 10.0)),
-            
-            # 初期値（ダッシュボード同期用）
-            "initial_balance": float(raw_config.get("initial_balance", raw_config.get("INITIAL_BALANCE", 43.0))),
-            
-            # レバレッジ（初期値、後で同期）
-            "leverage": 100,  # デフォルト100倍
-            
-            "slack_webhook": raw_config.get("slack_webhook"),
-        }
-        
+        # 環境情報ログ
+        logger.info(f"🌍 環境: {'🧪 TESTNET' if is_testnet(config['base_url']) else '🚀 PRODUCTION'}")
         logger.info(f"🔗 Base URL: {config['base_url']}")
         logger.info(f"👤 Account ID: {config['account_id']}")
         logger.info(f"💱 Symbol: {config['symbol']}")
-        logger.info(f"💰 初期資金: ${config['initial_balance']:.2f}")
-        logger.info(f"💵 注文サイズ: ${config['order_size_usdt']:.2f}")
-        logger.info(f"📐 グリッド間隔: {config['grid_interval']}")
-        logger.info(f"🎯 グリッド本数: {config['grid_count']}本（片側基準）")
         
-        logger.info("🤖 Bot初期化中...")
+        # Bot初期化
         bot = CaptainGridBot(config)
         
-        # API接続確認
-        await check_api_version(bot)
+        # API接続確認（失敗しても続行）
+        await check_api_connection(bot)
         
-        # レバレッジ同期
-        await sync_leverage(bot)
+        # メインループ開始
+        logger.info("👀 監視開始 - グリッドボット稼働中...")
         
-        # Rate Limit & V2通知
-        logger.info("=" * 70)
-        logger.warning("⚠️ EdgeX Rate Limit: 2 operations/2 seconds（自動待機対応）")
-        logger.info("📢 EdgeX V2 API: 2026 Q1予定（V1は継続稼働中）")
-        logger.info("=" * 70)
-        
-        logger.info("🚀 Captain Grid Bot 正式起動！！")
-        logger.info("=" * 70)
-        
-        await bot.run()
-        
+        while True:
+            try:
+                current_price = await bot.get_price()
+                if not current_price:
+                    logger.error("❌ 現在価格取得失敗 - 30秒後に再試行")
+                    await asyncio.sleep(30)
+                    continue
+                
+                balance = await bot.get_balance()
+                logger.info(f"💰 現在残高: ${balance:.4f} | 価格: ${current_price:.2f}")
+                
+                # Phase更新 & グリッド設定計算
+                bot.update_phase(balance)
+                grid_count, grid_interval = bot.calculate_grid_settings(balance, current_price)
+                bot.current_grid_count = grid_count
+                bot.current_grid_interval = grid_interval
+                
+                # グリッド配置
+                await bot.place_grid(current_price)
+                
+                # 連続エラーリセット
+                bot.consecutive_errors = 0
+                
+                # 次のチェックまで待機（10秒ごとに監視）
+                await asyncio.sleep(10)
+                
+            except Exception as e:
+                bot.consecutive_errors += 1
+                logger.error(f"❌ メインループエラー ({bot.consecutive_errors}/{bot.max_consecutive_errors}): {e}")
+                
+                if bot.consecutive_errors >= bot.max_consecutive_errors:
+                    logger.error("❌ 連続エラー上限 - 一時停止")
+                    await asyncio.sleep(60)
+                    bot.consecutive_errors = 0
+                
+                await asyncio.sleep(10)
+                
     except KeyboardInterrupt:
-        logger.info("⛔ ユーザーによる手動停止")
+        logger.info("⛔ 手動停止されました")
     except Exception as e:
-        logger.error("=" * 70)
         logger.error(f"❌ 致命的エラー: {e}")
-        logger.error("=" * 70)
         raise
-    finally:
-        logger.info("=" * 70)
-        logger.info("👋 Captain Grid Bot 終了")
-        logger.info("=" * 70)
 
 if __name__ == "__main__":
     asyncio.run(main())
